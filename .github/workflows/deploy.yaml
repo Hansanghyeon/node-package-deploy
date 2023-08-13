@@ -1,0 +1,163 @@
+name: 📦 패키지 배포
+
+# .changeset, packages 디렉토리의 변경사항들이 main 브렌치에 push될때 이벤트를 실행한다. 
+on:
+  push:
+    paths:
+      - ".changeset/**"
+      - "src/**/*.js"
+      - "READEMD.md"
+    branches:
+      - main
+
+jobs:
+  is-run:
+    name: Changesets RUN
+    runs-on: ubuntu-latest
+    outputs:
+      result: ${{ steps.result.outputs.result }}
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+      # Node.js를 설치한다.
+      - name: Setup Node.js
+        uses: actions/setup-node@v2
+        with:
+          node-version: "lts/*"
+    
+      # Changeset을 실행하기 위해서 의존성을 설치한다.
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile --ignore-engines
+        env:
+          CI: true
+
+      # Changesets에서 제공하는 Action을 사용할 수 있다.
+      # NPM에 배포, Git 태그 생성 등의 작업을 수행한다.
+      - name: Create release Pull Request or publish to NPM
+        id: changesets
+        uses: changesets/action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # PR 프로세스를 거쳐서 npm에 배포된 버전보다 소스코드의 버전이 높은지 확인한다.
+      - name: Check version
+        id: version
+        run: |
+          result=$(make is_run | tail -1)
+          echo "test=$result"
+          echo "result=$result" >> "$GITHUB_OUTPUT"
+
+      - id: result
+        # Changeset 기록이 없고 package 버전이 높다면 PUBLSIH
+        # Changeset 기록이 없고 package 버전이 같다면 ERROR
+        # Changeset 기록이 있고 package 버전이 높다면 PULL_REQUEST
+        # Changeset 기록이 있고 package 버전이 같다면 PULL_REQEUST
+        run: |
+          if [ "${{ steps.changesets.outputs.hasChangesets }}" == "false" ] && [ "${{ steps.version.outputs.result }}" == "true" ]; then
+            echo "result=PUBLISH" >> "$GITHUB_OUTPUT"
+          elif [ "${{ steps.changesets.outputs.hasChangesets }}" == "false" ] && [ "${{ steps.version.outputs.result }}" == "false" ]; then
+            echo "result=ERROR" >> "$GITHUB_OUTPUT"
+          elif [ "${{ steps.changesets.outputs.hasChangesets }}" == "true" ] && [ "${{ steps.version.outputs.result }}" == "true" ]; then
+            echo "result=PULL_REQUEST, true, true" >> "$GITHUB_OUTPUT"
+          elif [ "${{ steps.changesets.outputs.hasChangesets }}" == "true" ] && [ "${{ steps.version.outputs.result }}" == "false" ]; then
+            echo "result=PULL_REQUEST, true, false" >> "$GITHUB_OUTPUT"
+          else
+            echo "result=GITHUB ACTION ERROR deploy.yaml 65 line check" >> "$GITHUB_OUTPUT"
+          fi
+
+  check-env:
+    name: GITHUB OUTPUT 환경변수 확인
+    runs-on: ubuntu-latest
+    needs: [is-run]
+    env:
+      result: ${{ needs.is-run.outputs.result }}
+    steps:
+      - name: Check env
+        run: |
+          echo "result=$result"
+
+  npm-release:
+    name: Release (npm)
+    runs-on: ubuntu-latest
+    needs: [is-run]
+    if: ${{ needs.is-run.outputs.result == 'PUBLISH' }}
+    steps:
+      # 레포지토리에 체크아웃하여 소스를 가져온다.
+      - name: Checkout branch
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+
+      # Node.js를 설치한다.
+      - name: Setup Node.js
+        uses: actions/setup-node@v2
+        with:
+          node-version: "lts/*"
+
+      # 빌드 및 테스트를 위해서 의존성을 설치한다.
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile --ignore-engines
+        env:
+          CI: true
+
+      # 패키지를 빌드한다.
+      - name: Build packages
+        run: yarn build
+
+      # 배포를 위해 .npmrc 파일을 생성하고 인증 토큰을 추가한다
+      - name: NPM_TOKEN 설정
+        if: steps.changesets.outputs.hasChangesets == 'false'
+        run: |
+          cat << EOF > "$HOME/.npmrc"
+            //registry.npmjs.org/:_authToken=$NPM_TOKEN
+          EOF
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish
+        run: npm publish
+
+  # github package에 배포하는 것은 메인 배포가 아니기 때문에 npm 배포가 정상적으로 완료된다면 github package에 배포한다.
+  gh-release:
+    name: Release (github package)
+    needs: [is-run]
+    if: ${{ needs.is-run.outputs.result == 'PUBLISH' }}
+    runs-on: ubuntu-latest
+    steps:
+      # 레포지토리에 체크아웃하여 소스를 가져온다.
+      - name: Checkout branch
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+
+      # Node.js를 설치한다.
+      - name: Setup Node.js
+        uses: actions/setup-node@v2
+        with:
+          node-version: "lts/*"
+
+      # @hyeon 또는 @*/* 패키지를 Github에 배포하기위해서 @Hansanghyeon:*로 이름을 변경한다
+      - name: Rename package name
+        run: |
+          sed -i 's/"@hyeon\/eslint-config"/"@hansanghyeon\/eslint-config"/' package.json
+
+      # 빌드 및 테스트를 위해서 의존성을 설치한다.
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile --ignore-engines
+        env:
+          CI: true
+
+      # 배포를 위해 .npmrc 파일을 생성하고 인증 토큰을 추가한다.
+      - name: Configure npm
+        run: |
+          cat << EOF > "$HOME/.npmrc"
+            @hansanghyeon:registry=https://npm.pkg.github.com/
+            //npm.pkg.github.com/:_authToken=$GH_TOKEN
+          EOF
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish
+        run: npm publish
