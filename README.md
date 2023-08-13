@@ -61,5 +61,28 @@ flowchart TD
     end
 ```
 
+## install
+
+- (require) semver
+- (require) changesets
+
+## Feature, TODO
+
+- [x] `버전, changeset` github action 구성하기
+- [ ] `NPM 배포` 실제 배포되는지 확인하기
+- [ ] `Github 배포` 실제 배포되는지 확인하기
+- [ ] `알림발송` 예시 구성하기
+
+## Using, 사용하기
+
+- `.github/workflows/deploy.yaml` 파일에서 144번째줄 수정하기
+- `.github/workflows/deploy.yaml` 파일에서 156번째줄 수정하기
+- `.github/config/check_version.sh` 파일에서 5번째줄 수정하기
+
+
+
+
+
+
 - 참고
   - https://docs.github.com/ko/actions/using-jobs/defining-outputs-for-jobs
